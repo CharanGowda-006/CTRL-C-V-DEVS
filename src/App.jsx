@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, RotateCcw, Plus, Trash2, Key, Trophy, Ghost } from 'lucide-react';
+import { Play, Pause, RotateCcw, Plus, Trash2, Key, Trophy } from 'lucide-react';
 
 const App = () => {
   // State management
@@ -42,101 +42,108 @@ const App = () => {
     setFloatingElements(elements);
   }, []);
 
-  // Multi-agent BFS algorithm with simultaneous movement
-    // Multi-agent BFS algorithm (optimized and corrected)
-  // Compute shortest path from each detective to the trophy individually
-const runBFS = () => {
-  const directions = [
-    [-1, 0], [1, 0], [0, -1], [0, 1]
-  ];
+  // Multi-agent BFS algorithm with door unlocking tracking
+  const runBFS = () => {
+    const directions = [
+      [-1, 0], [1, 0], [0, -1], [0, 1]
+    ];
 
-  const isValid = (r, c) => r >= 0 && r < rows && c >= 0 && c < cols;
-  const lockedSet = new Set(lockedDoors.map(d => `${d.row},${d.col}`));
+    const isValid = (r, c) => r >= 0 && r < rows && c >= 0 && c < cols;
+    const lockedSet = new Set(lockedDoors.map(d => `${d.row},${d.col}`));
 
-  // ---- Helper: BFS to get shortest path for one detective ----
-  const bfsForDetective = (start, hasKey) => {
-    const queue = [[start, [start]]];
-    const visited = new Set([`${start.row},${start.col}`]);
+    // ---- Helper: BFS to get shortest path for one detective ----
+    const bfsForDetective = (start, hasKey) => {
+      const queue = [[start, [start]]];
+      const visited = new Set([`${start.row},${start.col}`]);
 
-    while (queue.length > 0) {
-      const [pos, path] = queue.shift();
-      if (pos.row === trophy.row && pos.col === trophy.col) {
-        return path; // shortest path found
-      }
+      while (queue.length > 0) {
+        const [pos, path] = queue.shift();
+        if (pos.row === trophy.row && pos.col === trophy.col) {
+          return path; // shortest path found
+        }
 
-      for (const [dr, dc] of directions) {
-        const newR = pos.row + dr;
-        const newC = pos.col + dc;
-        if (!isValid(newR, newC)) continue;
+        for (const [dr, dc] of directions) {
+          const newR = pos.row + dr;
+          const newC = pos.col + dc;
+          if (!isValid(newR, newC)) continue;
 
-        const key = `${newR},${newC}`;
-        const isLocked = lockedSet.has(key);
-        if (isLocked && !hasKey) continue; // can’t pass locked door
+          const key = `${newR},${newC}`;
+          const isLocked = lockedSet.has(key);
+          if (isLocked && !hasKey) continue; // can't pass locked door
 
-        if (!visited.has(key)) {
-          visited.add(key);
-          queue.push([{ row: newR, col: newC }, [...path, { row: newR, col: newC }]]);
+          if (!visited.has(key)) {
+            visited.add(key);
+            queue.push([{ row: newR, col: newC }, [...path, { row: newR, col: newC }]]);
+          }
         }
       }
-    }
-    return null; // no path exists
-  };
+      return null; // no path exists
+    };
 
-  // ---- Compute each detective's shortest path ----
-  const results = detectives.map(det => ({
-    name: det.name,
-    idx: detectives.indexOf(det),
-    path: bfsForDetective({ row: det.row, col: det.col }, det.hasKey),
-  }));
+    // ---- Compute each detective's shortest path ----
+    const results = detectives.map((det, idx) => ({
+      name: det.name,
+      idx: idx,
+      hasKey: det.hasKey,
+      path: bfsForDetective({ row: det.row, col: det.col }, det.hasKey),
+    }));
 
-  // Filter out detectives who can't reach the trophy
-  const valid = results.filter(r => r.path);
+    // Filter out detectives who can't reach the trophy
+    const valid = results.filter(r => r.path);
 
-  if (valid.length === 0) {
-    return { steps: [], winner: null, winnerPath: [] };
-  }
-
-  // ---- Determine how many steps to animate ----
-  const maxSteps = Math.max(...valid.map(r => r.path.length));
-  const steps = [];
-
-  let winner = null;
-
-  // Simulate all detectives moving step-by-step
-  for (let step = 0; step < maxSteps; step++) {
-    const currentPositions = valid.map(r => {
-      const pos = r.path[Math.min(step, r.path.length - 1)];
-      return { ...pos, name: r.name };
-    });
-
-    // Check if anyone reached the trophy this step
-    const arrivals = valid.filter(r => r.path.length - 1 === step);
-    if (arrivals.length > 0 && !winner) {
-      // Lexicographically smallest name wins if tie
-      winner = arrivals.sort((a, b) => a.name.localeCompare(b.name))[0];
-      // Stop animation after this frame
-      steps.push({ positions: currentPositions, step });
-      return {
-        steps,
-        winner: { idx: winner.idx, name: winner.name },
-        winnerPath: winner.path,
-      };
+    if (valid.length === 0) {
+      return { steps: [], winner: null, winnerPath: [] };
     }
 
-    // Record frame
-    steps.push({ positions: currentPositions, step });
-  }
+    // ---- Determine how many steps to animate ----
+    const maxSteps = Math.max(...valid.map(r => r.path.length));
+    const steps = [];
+    let winner = null;
+    const unlockedDoorsSoFar = new Set(); // Tracks globally unlocked doors
 
-  // Fallback: no one reached (shouldn’t happen if valid.length > 0)
-  return {
-    steps,
-    winner: { idx: valid[0].idx, name: valid[0].name },
-    winnerPath: valid[0].path,
+    for (let step = 0; step < maxSteps; step++) {
+      const currentPositions = valid.map(r => {
+        const pos = r.path[Math.min(step, r.path.length - 1)];
+        return { ...pos, name: r.name, hasKey: r.hasKey };
+      });
+
+      // Check for new unlocks this step
+      currentPositions.forEach(pos => {
+        const cellKey = `${pos.row},${pos.col}`;
+        // If this cell is a locked door AND detective has key AND not already unlocked
+        if (lockedSet.has(cellKey) && pos.hasKey && !unlockedDoorsSoFar.has(cellKey)) {
+          unlockedDoorsSoFar.add(cellKey);
+        }
+      });
+
+      // Create a snapshot of all unlocked doors up to this step
+      const currentUnlocked = new Set(unlockedDoorsSoFar);
+
+      // Check if anyone reached the trophy this step
+      const arrivals = valid.filter(r => r.path.length - 1 === step);
+      if (arrivals.length > 0 && !winner) {
+        // Lexicographically smallest name wins if tie
+        winner = arrivals.sort((a, b) => a.name.localeCompare(b.name))[0];
+        // Stop animation after this frame
+        steps.push({ positions: currentPositions, unlockedDoors: currentUnlocked, step });
+        return {
+          steps,
+          winner: { idx: winner.idx, name: winner.name },
+          winnerPath: winner.path,
+        };
+      }
+
+      // Record frame
+      steps.push({ positions: currentPositions, unlockedDoors: currentUnlocked, step });
+    }
+
+    // Fallback: no one reached (shouldn't happen if valid.length > 0)
+    return {
+      steps,
+      winner: { idx: valid[0].idx, name: valid[0].name },
+      winnerPath: valid[0].path,
+    };
   };
-};
-
-
-
 
   // Start simulation
   const startSimulation = () => {
@@ -159,7 +166,7 @@ const runBFS = () => {
       intervalRef.current = setInterval(() => {
         setCurrentStep(prev => {
           if (prev >= simulationData.steps.length - 1) {
-            setIsSimulating(false);
+            if (intervalRef.current) clearInterval(intervalRef.current);
             return prev;
           }
           return prev + 1;
@@ -184,7 +191,7 @@ const runBFS = () => {
   const currentStepData = simulationData?.steps[currentStep];
   const currentUnlockedDoors = currentStepData?.unlockedDoors || new Set();
   const winnerPath = simulationData?.winnerPath || [];
-  const showWinnerPath = currentStep === simulationData?.steps.length - 1 && winner;
+  const showWinnerPath = currentStep === (simulationData?.steps.length - 1) && winner;
 
   return (
     <div className="min-h-screen bg-black relative overflow-hidden">
@@ -363,7 +370,31 @@ const runBFS = () => {
                   {lockedDoors.map((door, idx) => (
                     <div key={idx} className="bg-black bg-opacity-60 p-2 rounded border-2 border-red-700 flex items-center gap-2">
                       <span className="text-red-500">🔒</span>
-                      <span className="text-orange-300">Row: {door.row}, Col: {door.col}</span>
+                      
+                      <label className="text-orange-300 text-sm">Row:</label>
+                      <input
+                        type="number"
+                        value={door.row}
+                        onChange={(e) => {
+                          const newDoors = [...lockedDoors];
+                          newDoors[idx].row = Math.min(rows - 1, Math.max(0, parseInt(e.target.value) || 0));
+                          setLockedDoors(newDoors);
+                        }}
+                        className="w-16 px-2 py-1 bg-gray-900 border border-orange-600 rounded text-orange-300 text-sm"
+                      />
+                      
+                      <label className="text-orange-300 text-sm">Col:</label>
+                      <input
+                        type="number"
+                        value={door.col}
+                        onChange={(e) => {
+                          const newDoors = [...lockedDoors];
+                          newDoors[idx].col = Math.min(cols - 1, Math.max(0, parseInt(e.target.value) || 0));
+                          setLockedDoors(newDoors);
+                        }}
+                        className="w-16 px-2 py-1 bg-gray-900 border border-orange-600 rounded text-orange-300 text-sm"
+                      />
+
                       <button
                         onClick={() => setLockedDoors(lockedDoors.filter((_, i) => i !== idx))}
                         className="ml-auto p-1 bg-red-700 rounded hover:bg-red-600"
@@ -493,9 +524,9 @@ const runBFS = () => {
               >
                 {Array.from({ length: rows }).map((_, r) =>
                   Array.from({ length: cols }).map((_, c) => {
-                    const lockedKey = `${r},${c}`;
+                    const cellKey = `${r},${c}`;
                     const isLocked = lockedDoors.some(d => d.row === r && d.col === c);
-                    const isUnlocked = currentUnlockedDoors.has(lockedKey);
+                    const isUnlocked = currentUnlockedDoors.has(cellKey);
                     const isTrophy = trophy.row === r && trophy.col === c;
                     const detsHere = currentStepData?.positions.filter(p => p.row === r && p.col === c) || [];
                     const isOnWinnerPath = showWinnerPath && winnerPath.some(p => p.row === r && p.col === c);
@@ -504,11 +535,15 @@ const runBFS = () => {
                       <div
                         key={`${r}-${c}`}
                         className={`aspect-square border-4 rounded-lg flex items-center justify-center relative transition-all duration-300 ${
-                          isLocked && !isUnlocked ? 'bg-red-900 border-red-600 shadow-[0_0_20px_rgba(255,0,0,0.6)]' :
-                          isLocked && isUnlocked ? 'bg-green-900 border-green-600 shadow-[0_0_20px_rgba(0,255,0,0.6)] animate-pulse' :
-                          isTrophy ? 'bg-yellow-900 border-yellow-600 shadow-[0_0_20px_rgba(255,215,0,0.6)]' :
-                          isOnWinnerPath ? 'bg-orange-800 border-orange-500 shadow-[0_0_20px_rgba(255,165,0,0.8)]' :
-                          'bg-gray-800 bg-opacity-70 border-orange-700'
+                          isLocked && !isUnlocked 
+                            ? 'bg-red-900 border-red-600 shadow-[0_0_20px_rgba(255,0,0,0.6)]' 
+                            : isLocked && isUnlocked 
+                            ? 'bg-green-900 border-green-600 shadow-[0_0_20px_rgba(0,255,0,0.6)] animate-pulse' 
+                            : isTrophy 
+                            ? 'bg-yellow-900 border-yellow-600 shadow-[0_0_20px_rgba(255,215,0,0.6)]' 
+                            : isOnWinnerPath 
+                            ? 'bg-orange-800 border-orange-500 shadow-[0_0_20px_rgba(255,165,0,0.8)]' 
+                            : 'bg-gray-800 bg-opacity-70 border-orange-700'
                         }`}
                       >
                         {isOnWinnerPath && <span className="absolute text-4xl animate-bounce">🎃</span>}
