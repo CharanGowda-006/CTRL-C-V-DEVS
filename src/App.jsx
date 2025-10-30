@@ -43,116 +43,100 @@ const App = () => {
   }, []);
 
   // Multi-agent BFS algorithm with simultaneous movement
-  const runBFS = () => {
-    const directions = [[-1, 0], [1, 0], [0, -1], [0, 1]];
-    const isValid = (r, c) => r >= 0 && r < rows && c >= 0 && c < cols;
-    
-    let queue = detectives.map((det, idx) => ({
-      positions: detectives.map(d => ({ row: d.row, col: d.col })),
-      unlockedDoors: new Set(),
-      step: 0,
-      paths: detectives.map(d => [{ row: d.row, col: d.col }])
-    }));
-    
-    const visited = new Set();
-    const getStateKey = (positions, unlocked) => {
-      const posKey = positions.map(p => `${p.row},${p.col}`).sort().join('|');
-      const unlockKey = Array.from(unlocked).sort().join('|');
-      return `${posKey}:${unlockKey}`;
-    };
-    
-    const steps = [];
-    const lockedSet = new Set(lockedDoors.map(d => `${d.row},${d.col}`));
-    
+    // Multi-agent BFS algorithm (optimized and corrected)
+  // Compute shortest path from each detective to the trophy individually
+const runBFS = () => {
+  const directions = [
+    [-1, 0], [1, 0], [0, -1], [0, 1]
+  ];
+
+  const isValid = (r, c) => r >= 0 && r < rows && c >= 0 && c < cols;
+  const lockedSet = new Set(lockedDoors.map(d => `${d.row},${d.col}`));
+
+  // ---- Helper: BFS to get shortest path for one detective ----
+  const bfsForDetective = (start, hasKey) => {
+    const queue = [[start, [start]]];
+    const visited = new Set([`${start.row},${start.col}`]);
+
     while (queue.length > 0) {
-      const current = queue.shift();
-      const stateKey = getStateKey(current.positions, current.unlockedDoors);
-      
-      if (visited.has(stateKey)) continue;
-      visited.add(stateKey);
-      
-      // Record this step
-      steps.push({
-        positions: current.positions.map((p, i) => ({ ...p, name: detectives[i].name })),
-        unlockedDoors: new Set(current.unlockedDoors),
-        step: current.step,
-        paths: current.paths.map(p => [...p]),
-        justUnlocked: []
-      });
-      
-      // Check if any detective reached trophy
-      const winners = [];
-      current.positions.forEach((pos, idx) => {
-        if (pos.row === trophy.row && pos.col === trophy.col) {
-          winners.push({ idx, name: detectives[idx].name });
-        }
-      });
-      
-      if (winners.length > 0) {
-        winners.sort((a, b) => a.name.localeCompare(b.name));
-        return { steps, winner: winners[0], winnerPath: current.paths[winners[0].idx] };
+      const [pos, path] = queue.shift();
+      if (pos.row === trophy.row && pos.col === trophy.col) {
+        return path; // shortest path found
       }
-      
-      // Generate all possible next states (all detectives move simultaneously)
-      const nextMoves = detectives.map(() => []);
-      
-      current.positions.forEach((pos, detIdx) => {
-        directions.forEach(([dr, dc]) => {
-          const newR = pos.row + dr;
-          const newC = pos.col + dc;
-          if (isValid(newR, newC)) {
-            const doorKey = `${newR},${newC}`;
-            if (!lockedSet.has(doorKey) || current.unlockedDoors.has(doorKey)) {
-              nextMoves[detIdx].push({ row: newR, col: newC });
-            }
-          }
-        });
-        // Can also stay in place
-        nextMoves[detIdx].push({ row: pos.row, col: pos.col });
-      });
-      
-      // Generate all combinations of moves
-      const generateCombinations = (index, currentCombo) => {
-        if (index === detectives.length) {
-          const newUnlocked = new Set(current.unlockedDoors);
-          const justUnlocked = [];
-          
-          // Check for unlocking doors
-          currentCombo.forEach((pos, detIdx) => {
-            if (detectives[detIdx].hasKey) {
-              directions.forEach(([dr, dc]) => {
-                const checkR = pos.row + dr;
-                const checkC = pos.col + dc;
-                const doorKey = `${checkR},${checkC}`;
-                if (lockedSet.has(doorKey) && !newUnlocked.has(doorKey)) {
-                  newUnlocked.add(doorKey);
-                  justUnlocked.push({ row: checkR, col: checkC });
-                }
-              });
-            }
-          });
-          
-          const newPaths = current.paths.map((path, idx) => [...path, currentCombo[idx]]);
-          
-          queue.push({
-            positions: currentCombo,
-            unlockedDoors: newUnlocked,
-            step: current.step + 1,
-            paths: newPaths
-          });
-          return;
+
+      for (const [dr, dc] of directions) {
+        const newR = pos.row + dr;
+        const newC = pos.col + dc;
+        if (!isValid(newR, newC)) continue;
+
+        const key = `${newR},${newC}`;
+        const isLocked = lockedSet.has(key);
+        if (isLocked && !hasKey) continue; // can’t pass locked door
+
+        if (!visited.has(key)) {
+          visited.add(key);
+          queue.push([{ row: newR, col: newC }, [...path, { row: newR, col: newC }]]);
         }
-        
-        nextMoves[index].forEach(move => {
-          generateCombinations(index + 1, [...currentCombo, move]);
-        });
-      };
-      
-      generateCombinations(0, []);
+      }
     }
-    
-    return { steps, winner: null, winnerPath: [] };
+    return null; // no path exists
   };
+
+  // ---- Compute each detective's shortest path ----
+  const results = detectives.map(det => ({
+    name: det.name,
+    idx: detectives.indexOf(det),
+    path: bfsForDetective({ row: det.row, col: det.col }, det.hasKey),
+  }));
+
+  // Filter out detectives who can't reach the trophy
+  const valid = results.filter(r => r.path);
+
+  if (valid.length === 0) {
+    return { steps: [], winner: null, winnerPath: [] };
+  }
+
+  // ---- Determine how many steps to animate ----
+  const maxSteps = Math.max(...valid.map(r => r.path.length));
+  const steps = [];
+
+  let winner = null;
+
+  // Simulate all detectives moving step-by-step
+  for (let step = 0; step < maxSteps; step++) {
+    const currentPositions = valid.map(r => {
+      const pos = r.path[Math.min(step, r.path.length - 1)];
+      return { ...pos, name: r.name };
+    });
+
+    // Check if anyone reached the trophy this step
+    const arrivals = valid.filter(r => r.path.length - 1 === step);
+    if (arrivals.length > 0 && !winner) {
+      // Lexicographically smallest name wins if tie
+      winner = arrivals.sort((a, b) => a.name.localeCompare(b.name))[0];
+      // Stop animation after this frame
+      steps.push({ positions: currentPositions, step });
+      return {
+        steps,
+        winner: { idx: winner.idx, name: winner.name },
+        winnerPath: winner.path,
+      };
+    }
+
+    // Record frame
+    steps.push({ positions: currentPositions, step });
+  }
+
+  // Fallback: no one reached (shouldn’t happen if valid.length > 0)
+  return {
+    steps,
+    winner: { idx: valid[0].idx, name: valid[0].name },
+    winnerPath: valid[0].path,
+  };
+};
+
+
+
 
   // Start simulation
   const startSimulation = () => {
