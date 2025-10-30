@@ -42,29 +42,27 @@ const App = () => {
     setFloatingElements(elements);
   }, []);
 
-  // Multi-agent BFS algorithm with simultaneous movement - FIXED
+  // Multi-agent BFS algorithm with simultaneous movement
   const runBFS = () => {
     const directions = [[-1, 0], [1, 0], [0, -1], [0, 1]];
     const isValid = (r, c) => r >= 0 && r < rows && c >= 0 && c < cols;
     
-    // Initialize starting state
-    const initialState = {
+    let queue = detectives.map((det, idx) => ({
       positions: detectives.map(d => ({ row: d.row, col: d.col })),
       unlockedDoors: new Set(),
       step: 0,
       paths: detectives.map(d => [{ row: d.row, col: d.col }])
-    };
+    }));
     
-    const queue = [initialState];
     const visited = new Set();
-    const lockedSet = new Set(lockedDoors.map(d => `${d.row},${d.col}`));
-    const steps = [];
-    
     const getStateKey = (positions, unlocked) => {
-      const posKey = positions.map(p => `${p.row},${p.col}`).join('|');
+      const posKey = positions.map(p => `${p.row},${p.col}`).sort().join('|');
       const unlockKey = Array.from(unlocked).sort().join('|');
       return `${posKey}:${unlockKey}`;
     };
+    
+    const steps = [];
+    const lockedSet = new Set(lockedDoors.map(d => `${d.row},${d.col}`));
     
     while (queue.length > 0) {
       const current = queue.shift();
@@ -78,7 +76,8 @@ const App = () => {
         positions: current.positions.map((p, i) => ({ ...p, name: detectives[i].name })),
         unlockedDoors: new Set(current.unlockedDoors),
         step: current.step,
-        paths: current.paths.map(p => [...p])
+        paths: current.paths.map(p => [...p]),
+        justUnlocked: []
       });
       
       // Check if any detective reached trophy
@@ -90,74 +89,50 @@ const App = () => {
       });
       
       if (winners.length > 0) {
-        // Sort lexicographically and return first winner
         winners.sort((a, b) => a.name.localeCompare(b.name));
         return { steps, winner: winners[0], winnerPath: current.paths[winners[0].idx] };
       }
       
-      // Generate next states - each detective tries all 4 directions + stay
-      const possibleMoves = [];
+      // Generate all possible next states (all detectives move simultaneously)
+      const nextMoves = detectives.map(() => []);
       
-      // For each detective, calculate valid moves
-      detectives.forEach((det, detIdx) => {
-        const currentPos = current.positions[detIdx];
-        const moves = [];
-        
-        // Try all 4 directions
+      current.positions.forEach((pos, detIdx) => {
         directions.forEach(([dr, dc]) => {
-          const newR = currentPos.row + dr;
-          const newC = currentPos.col + dc;
-          
+          const newR = pos.row + dr;
+          const newC = pos.col + dc;
           if (isValid(newR, newC)) {
             const doorKey = `${newR},${newC}`;
-            // Can move if not locked OR if already unlocked
             if (!lockedSet.has(doorKey) || current.unlockedDoors.has(doorKey)) {
-              moves.push({ row: newR, col: newC });
+              nextMoves[detIdx].push({ row: newR, col: newC });
             }
           }
         });
-        
-        possibleMoves.push(moves);
+        // Can also stay in place
+        nextMoves[detIdx].push({ row: pos.row, col: pos.col });
       });
       
-      // Generate all combinations of simultaneous moves using cartesian product
+      // Generate all combinations of moves
       const generateCombinations = (index, currentCombo) => {
         if (index === detectives.length) {
-          // Check if at least one detective moved
-          const someoneMoved = currentCombo.some((pos, idx) => 
-            pos.row !== current.positions[idx].row || pos.col !== current.positions[idx].col
-          );
-          
-          if (!someoneMoved && current.step > 0) return; // Skip if no one moved (except initial state)
-          
-          // Calculate new unlocked doors
           const newUnlocked = new Set(current.unlockedDoors);
+          const justUnlocked = [];
           
+          // Check for unlocking doors
           currentCombo.forEach((pos, detIdx) => {
             if (detectives[detIdx].hasKey) {
-              // Check all 4 adjacent cells for locked doors
               directions.forEach(([dr, dc]) => {
                 const checkR = pos.row + dr;
                 const checkC = pos.col + dc;
-                if (isValid(checkR, checkC)) {
-                  const doorKey = `${checkR},${checkC}`;
-                  if (lockedSet.has(doorKey)) {
-                    newUnlocked.add(doorKey);
-                  }
+                const doorKey = `${checkR},${checkC}`;
+                if (lockedSet.has(doorKey) && !newUnlocked.has(doorKey)) {
+                  newUnlocked.add(doorKey);
+                  justUnlocked.push({ row: checkR, col: checkC });
                 }
               });
             }
           });
           
-          // Create new paths
-          const newPaths = current.paths.map((path, idx) => {
-            // Only add to path if position changed
-            if (currentCombo[idx].row !== current.positions[idx].row || 
-                currentCombo[idx].col !== current.positions[idx].col) {
-              return [...path, currentCombo[idx]];
-            }
-            return path;
-          });
+          const newPaths = current.paths.map((path, idx) => [...path, currentCombo[idx]]);
           
           queue.push({
             positions: currentCombo,
@@ -168,12 +143,7 @@ const App = () => {
           return;
         }
         
-        // If a detective has no valid moves, keep them in place
-        const moves = possibleMoves[index].length > 0 
-          ? possibleMoves[index] 
-          : [current.positions[index]];
-        
-        moves.forEach(move => {
+        nextMoves[index].forEach(move => {
           generateCombinations(index + 1, [...currentCombo, move]);
         });
       };
@@ -462,10 +432,10 @@ const App = () => {
                           'bg-gray-800 border-orange-700'
                         }`}
                       >
-                        {isTrophy && <Trophy className="text-yellow-400 animate-pulse" size={28} />}
-                        {isLocked && <span className="text-3xl">🔒</span>}
+                        {isTrophy && <Trophy className="text-yellow-400 animate-pulse" size={24} />}
+                        {isLocked && <span className="text-2xl">🔒</span>}
                         {detsHere.map((det, idx) => (
-                          <span key={idx} className="absolute text-3xl" style={{ transform: `translate(${idx * 10}px, ${idx * 10}px)` }}>
+                          <span key={idx} className="absolute text-2xl" style={{ transform: `translate(${idx * 8}px, ${idx * 8}px)` }}>
                             {det.emoji}
                           </span>
                         ))}
@@ -543,7 +513,7 @@ const App = () => {
                     const isLocked = lockedDoors.some(d => d.row === r && d.col === c);
                     const isUnlocked = currentUnlockedDoors.has(lockedKey);
                     const isTrophy = trophy.row === r && trophy.col === c;
-                    const detsHere = currentStepData?.ositions.filter(p => p.row === r && p.col === c) || [];
+                    const detsHere = currentStepData?.positions.filter(p => p.row === r && p.col === c) || [];
                     const isOnWinnerPath = showWinnerPath && winnerPath.some(p => p.row === r && p.col === c);
 
                     return (
@@ -557,27 +527,18 @@ const App = () => {
                           'bg-gray-800 bg-opacity-70 border-orange-700'
                         }`}
                       >
-                        {isOnWinnerPath && <span className="absolute text-5xl animate-bounce z-0">🎃</span>}
-                        {isTrophy && <Trophy className="text-yellow-400 animate-pulse absolute z-10" size={40} />}
-                        {isLocked && !isUnlocked && <span className="text-4xl absolute z-10">🔒</span>}
-                        {isLocked && isUnlocked && <span className="text-4xl absolute z-10">🔓</span>}
-                        <div className="absolute inset-0 flex items-center justify-center z-20">
-                          {detsHere.map((det, idx) => {
-                            const detective = detectives.find(d => d.name === det.name);
-                            return (
-                              <div 
-                                key={idx} 
-                                className="absolute" 
-                                style={{ 
-                                  transform: `translate(${idx * 12 - (detsHere.length - 1) * 6}px, ${idx * 12 - (detsHere.length - 1) * 6}px)`,
-                                  filter: 'drop-shadow(0 0 8px rgba(255,165,0,0.8))'
-                                }}
-                              >
-                                <span className="text-5xl animate-bounce">{detective?.emoji}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
+                        {isOnWinnerPath && <span className="absolute text-4xl animate-bounce">🎃</span>}
+                        {isTrophy && <Trophy className="text-yellow-400 animate-pulse absolute" size={32} />}
+                        {isLocked && !isUnlocked && <span className="text-3xl absolute">🔒</span>}
+                        {isLocked && isUnlocked && <span className="text-3xl absolute">🔓</span>}
+                        {detsHere.map((det, idx) => {
+                          const detective = detectives.find(d => d.name === det.name);
+                          return (
+                            <div key={idx} className="absolute" style={{ transform: `translate(${idx * 10}px, ${idx * 10}px)` }}>
+                              <span className="text-4xl drop-shadow-lg animate-bounce">{detective?.emoji}</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     );
                   })
@@ -601,7 +562,7 @@ const App = () => {
                       }`}
                     >
                       <div className="flex items-center gap-2 mb-2">
-                        <span className="text-4xl">{det.emoji}</span>
+                        <span className="text-3xl">{det.emoji}</span>
                         <span className="text-orange-300 font-bold">{det.name}</span>
                         {det.hasKey && <Key size={16} className="text-yellow-400" />}
                       </div>
